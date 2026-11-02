@@ -26,6 +26,45 @@ class GroqClient {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    suspend fun validateApiKey(apiKey: String): Pair<Boolean, String> = suspendCancellableCoroutine { continuation ->
+        val trimmedKey = apiKey.trim()
+        if (trimmedKey.isBlank()) {
+            continuation.resume(Pair(false, "API key cannot be empty"))
+            return@suspendCancellableCoroutine
+        }
+
+        val request = Request.Builder()
+            .url("https://api.groq.com/openai/v1/models")
+            .addHeader("Authorization", "Bearer $trimmedKey")
+            .get()
+            .build()
+
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation {
+            call.cancel()
+        }
+
+        call.enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: IOException) {
+                if (!call.isCanceled()) {
+                    continuation.resume(Pair(false, "Connection error: ${e.localizedMessage ?: "Failed to reach Groq"}"))
+                }
+            }
+
+            override fun onResponse(call: okhttp3.Call, response: Response) {
+                response.use { res ->
+                    if (res.isSuccessful) {
+                        continuation.resume(Pair(true, "API key valid! Connection successful."))
+                    } else if (res.code == 401) {
+                        continuation.resume(Pair(false, "Invalid API key (401 Unauthorized)"))
+                    } else {
+                        continuation.resume(Pair(false, "Groq error (${res.code})"))
+                    }
+                }
+            }
+        })
+    }
+
     suspend fun transcribeAudio(
         apiKey: String,
         audioFile: File,
@@ -47,7 +86,7 @@ class GroqClient {
 
         val request = Request.Builder()
             .url("https://api.groq.com/openai/v1/audio/transcriptions")
-            .addHeader("Authorization", "Bearer \$apiKey")
+            .addHeader("Authorization", "Bearer $apiKey")
             .post(requestBody)
             .build()
 
@@ -74,13 +113,13 @@ class GroqClient {
                             429 -> {
                                 val retryAfter = res.header("Retry-After")
                                 if (retryAfter != null) {
-                                    "Rate limit hit, try again in \${retryAfter}s."
+                                    "Rate limit hit, try again in ${retryAfter}s."
                                 } else {
                                     "Rate limit hit, please wait."
                                 }
                             }
-                            in 500..599 -> "Groq server error (\${res.code}). Try again."
-                            else -> "Error: \${res.code}"
+                            in 500..599 -> "Groq server error (${res.code}). Try again."
+                            else -> "Error: ${res.code}"
                         }
                         continuation.resume(TranscriptionResult.Error(errorMsg))
                         return

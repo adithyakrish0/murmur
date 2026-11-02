@@ -1,6 +1,7 @@
 package com.murmur.keyboard.ui
 
 import android.content.Context
+import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
@@ -9,6 +10,7 @@ import android.view.View
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.graphics.drawable.DrawableCompat
 import com.murmur.keyboard.R
 
 class KeyboardView @JvmOverloads constructor(
@@ -38,6 +40,16 @@ class KeyboardView @JvmOverloads constructor(
         btnSpace = findViewById(R.id.btn_space)
         btnBackspace = findViewById(R.id.btn_backspace)
         btnEnter = findViewById(R.id.btn_enter)
+
+        // Tint bottom bar icons with light color for dark background
+        val iconTint = Color.parseColor("#E0E0E0")
+        listOf(btnGlobe, btnSpace, btnBackspace, btnEnter).forEach { btn ->
+            btn.drawable?.let {
+                val wrapped = DrawableCompat.wrap(it.mutate())
+                DrawableCompat.setTint(wrapped, iconTint)
+                btn.setImageDrawable(wrapped)
+            }
+        }
     }
 
     private val timerRunnable = object : Runnable {
@@ -59,11 +71,11 @@ class KeyboardView @JvmOverloads constructor(
                 stopTimer()
             }
             MicState.RECORDING -> {
-                hintText.text = message ?: "Listening... tap to stop"
+                hintText.text = message ?: "Listening… tap to stop"
                 startTimer()
             }
             MicState.PROCESSING -> {
-                hintText.text = message ?: "Transcribing..."
+                hintText.text = message ?: "Transcribing…"
                 stopTimer()
             }
             MicState.DONE -> {

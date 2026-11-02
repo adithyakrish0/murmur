@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.view.ContextThemeWrapper
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -41,7 +42,8 @@ class MurmurIME : InputMethodService() {
     private val handler = Handler(Looper.getMainLooper())
     private val amplitudeRunnable = object : Runnable {
         override fun run() {
-            if (keyboardView.micButton.currentState == MicState.RECORDING) {
+            if (::keyboardView.isInitialized &&
+                keyboardView.micButton.currentState == MicState.RECORDING) {
                 keyboardView.micButton.updateAmplitude(recorder.getMaxAmplitude())
                 handler.postDelayed(this, 50)
             }
@@ -57,7 +59,9 @@ class MurmurIME : InputMethodService() {
     }
 
     override fun onCreateInputView(): View {
-        keyboardView = KeyboardView(this)
+        // Wrap with Theme.Murmur so Material attrs (colorSurface, etc.) resolve correctly
+        val themedContext = ContextThemeWrapper(this, R.style.Theme_Murmur)
+        keyboardView = KeyboardView(themedContext)
         setupListeners()
         return keyboardView
     }
@@ -177,7 +181,8 @@ class MurmurIME : InputMethodService() {
     }
 
     private fun stopRecordingIfNeeded() {
-        if (keyboardView.micButton.currentState == MicState.RECORDING) {
+        if (::keyboardView.isInitialized &&
+            keyboardView.micButton.currentState == MicState.RECORDING) {
             recorder.stopRecording()
             recorder.deleteRecording()
             handler.removeCallbacks(amplitudeRunnable)
@@ -230,7 +235,7 @@ class MurmurIME : InputMethodService() {
                 if (ic != null) {
                     val beforeCursor = ic.getTextBeforeCursor(1, 0)
                     val textToInsert = if (!beforeCursor.isNullOrEmpty() && !beforeCursor[0].isWhitespace()) {
-                        " \$text"
+                        " $text"
                     } else {
                         text
                     }
@@ -241,7 +246,8 @@ class MurmurIME : InputMethodService() {
 
                     keyboardView.setState(MicState.DONE)
                     handler.postDelayed({
-                        if (keyboardView.micButton.currentState == MicState.DONE) {
+                        if (::keyboardView.isInitialized &&
+                            keyboardView.micButton.currentState == MicState.DONE) {
                             keyboardView.setState(MicState.IDLE)
                         }
                     }, 1000)
