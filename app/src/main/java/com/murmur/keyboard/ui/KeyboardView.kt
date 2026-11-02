@@ -20,6 +20,7 @@ class KeyboardView @JvmOverloads constructor(
     val micButton: MicButtonView
     val hintText: TextView
     val timerText: TextView
+    val btnSettings: ImageButton
 
     val btnGlobe: ImageButton
     val btnSpace: ImageButton
@@ -35,15 +36,16 @@ class KeyboardView @JvmOverloads constructor(
         micButton = findViewById(R.id.mic_button)
         hintText = findViewById(R.id.hint_text)
         timerText = findViewById(R.id.timer_text)
+        btnSettings = findViewById(R.id.btn_settings)
 
         btnGlobe = findViewById(R.id.btn_globe)
         btnSpace = findViewById(R.id.btn_space)
         btnBackspace = findViewById(R.id.btn_backspace)
         btnEnter = findViewById(R.id.btn_enter)
 
-        // Tint bottom bar icons with light color for dark background
+        // Tint all icons with light color for dark background
         val iconTint = Color.parseColor("#E0E0E0")
-        listOf(btnGlobe, btnSpace, btnBackspace, btnEnter).forEach { btn ->
+        listOf(btnSettings, btnGlobe, btnSpace, btnBackspace, btnEnter).forEach { btn ->
             btn.drawable?.let {
                 val wrapped = DrawableCompat.wrap(it.mutate())
                 DrawableCompat.setTint(wrapped, iconTint)

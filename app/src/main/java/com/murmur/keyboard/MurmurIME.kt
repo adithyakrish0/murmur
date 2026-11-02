@@ -94,6 +94,13 @@ class MurmurIME : InputMethodService() {
             handleMicTap()
         }
 
+        keyboardView.btnSettings.setOnClickListener {
+            val intent = Intent(this, SetupActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+        }
+
         keyboardView.btnGlobe.setOnClickListener {
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             val token = window.window?.attributes?.token
