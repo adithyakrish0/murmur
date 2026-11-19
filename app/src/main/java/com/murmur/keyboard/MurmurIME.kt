@@ -1,5 +1,6 @@
 package com.murmur.keyboard
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.inputmethodservice.InputMethodService
@@ -13,6 +14,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.ContextThemeWrapper
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -53,6 +55,9 @@ class MurmurIME : InputMethodService() {
         }
     }
 
+    private var backspaceRepeatRunnable: Runnable? = null
+    private var backspaceRepeatCount = 0
+
     private var currentFocusRequest: Any? = null // AudioFocusRequest on API 26+
 
     override fun onCreate() {
@@ -77,18 +82,21 @@ class MurmurIME : InputMethodService() {
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         stopRecordingIfNeeded()
+        cancelBackspaceRepeat()
         transcriptionJob?.cancel()
     }
 
     override fun onWindowHidden() {
         super.onWindowHidden()
         stopRecordingIfNeeded()
+        cancelBackspaceRepeat()
         transcriptionJob?.cancel()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         stopRecordingIfNeeded()
+        cancelBackspaceRepeat()
         lastRecordedAudioFile?.delete()
         lastRecordedAudioFile = null
         coroutineScope.coroutineContext[Job]?.cancel()
@@ -125,15 +133,7 @@ class MurmurIME : InputMethodService() {
             }
         }
 
-        // Backspace handling
-        keyboardView.btnBackspace.setOnClickListener {
-            currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
-            currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
-        }
-        keyboardView.btnBackspace.setOnLongClickListener {
-            currentInputConnection?.deleteSurroundingText(50, 0)
-            true
-        }
+        setupBackspace()
 
         keyboardView.btnSpace.setOnClickListener {
             currentInputConnection?.commitText(" ", 1)
@@ -147,6 +147,129 @@ class MurmurIME : InputMethodService() {
             } else {
                 currentInputConnection?.performEditorAction(action ?: EditorInfo.IME_ACTION_DONE)
             }
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupBackspace() {
+        keyboardView.btnBackspace.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.isPressed = true
+                    handleSingleDelete()
+                    vibrate(12)
+
+                    backspaceRepeatCount = 0
+                    backspaceRepeatRunnable = object : Runnable {
+                        override fun run() {
+                            backspaceRepeatCount++
+                            if (backspaceRepeatCount < 6) {
+                                // First 5 repeats: single character deletion with smooth 50ms delay
+                                handleSingleDelete()
+                                vibrate(12)
+                                handler.postDelayed(this, 50L)
+                            } else {
+                                // 6+ repeats: word-by-word deletion with distinct 160ms delay (like Gboard)
+                                handleWordDelete()
+                                vibrate(25)
+                                handler.postDelayed(this, 160L)
+                            }
+                        }
+                    }
+                    handler.postDelayed(backspaceRepeatRunnable!!, 350L)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    // Stop if finger slides off the button
+                    if (event.x < 0 || event.x > v.width || event.y < 0 || event.y > v.height) {
+                        stopBackspaceRepeat(v)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    stopBackspaceRepeat(v)
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun stopBackspaceRepeat(v: View) {
+        v.isPressed = false
+        cancelBackspaceRepeat()
+    }
+
+    private fun cancelBackspaceRepeat() {
+        backspaceRepeatRunnable?.let { handler.removeCallbacks(it) }
+        backspaceRepeatRunnable = null
+        backspaceRepeatCount = 0
+    }
+
+    private fun handleSingleDelete() {
+        val ic = currentInputConnection ?: return
+        val selected = ic.getSelectedText(0)
+        if (!selected.isNullOrEmpty()) {
+            ic.commitText("", 1)
+        } else {
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+        }
+    }
+
+    private fun handleWordDelete() {
+        val ic = currentInputConnection ?: return
+        val selected = ic.getSelectedText(0)
+        if (!selected.isNullOrEmpty()) {
+            ic.commitText("", 1)
+            return
+        }
+
+        ic.beginBatchEdit()
+        try {
+            // Inspect up to 100 characters before cursor to find word boundary
+            val textBefore = ic.getTextBeforeCursor(100, 0)
+            if (textBefore.isNullOrEmpty()) {
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+                return
+            }
+
+            val text = textBefore.toString()
+            var index = text.length
+
+            // Step 1: Skip trailing whitespace
+            while (index > 0 && text[index - 1].isWhitespace()) {
+                index--
+            }
+
+            // If only whitespace was present, delete that whitespace
+            if (index == 0) {
+                ic.deleteSurroundingText(text.length, 0)
+                return
+            }
+
+            // Step 2: Traverse backward through the word characters (or punctuation cluster)
+            val lastChar = text[index - 1]
+            if (lastChar.isLetterOrDigit()) {
+                while (index > 0 && text[index - 1].isLetterOrDigit()) {
+                    index--
+                }
+            } else {
+                // Punctuation / symbols cluster (e.g. "...", "?!", etc.)
+                while (index > 0 && !text[index - 1].isLetterOrDigit() && !text[index - 1].isWhitespace()) {
+                    index--
+                }
+            }
+
+            val countToDelete = text.length - index
+            if (countToDelete > 0) {
+                ic.deleteSurroundingText(countToDelete, 0)
+            } else {
+                ic.deleteSurroundingText(1, 0)
+            }
+        } finally {
+            ic.endBatchEdit()
         }
     }
 
@@ -372,15 +495,15 @@ class MurmurIME : InputMethodService() {
         currentFocusRequest = null
     }
 
-    private fun vibrate() {
+    private fun vibrate(durationMs: Long = 20) {
         if (!settings.hapticFeedbackEnabled) return
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         if (vibrator.hasVibrator()) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE))
+                vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
             } else {
                 @Suppress("DEPRECATION")
-                vibrator.vibrate(20)
+                vibrator.vibrate(durationMs)
             }
         }
     }
