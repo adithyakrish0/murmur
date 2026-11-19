@@ -8,8 +8,9 @@ It features a minimalistic UI with a responsive glowing microphone orb, real-tim
 
 ## ✨ Features
 * **Lightning-Fast Dictation**: Powered by Groq's `whisper-large-v3-turbo` (fast) or `whisper-large-v3` (high accuracy).
+* **Zero-Loss Retry**: If a network error, timeout, or rate limit occurs during transcription, your recorded audio is preserved in cache, and a dedicated **"⟳ Retry Last Recording"** button lets you re-send without speaking again.
 * **Smooth, Modern UI**: Deep navy theme with breathing glow idle state, amplitude-reactive expanding ripples while speaking, and smooth state animations.
-* **In-App API Key Testing**: Instant connection and credentials verification right from the setup screen.
+* **In-App Settings & API Key Testing**: Instant connection verification directly from the setup screen, plus a quick settings gear button right on the keyboard.
 * **Persistent Settings**: Integrated with Android Auto Backup (`backup_rules.xml` & `data_extraction_rules.xml`) — your API key and preferences safely persist across app updates and reinstalls.
 * **Rate Limits & Long Dictations**: Graceful error handling for Groq rate limits, with support for recordings capped at up to 5 minutes.
 * **Haptic Feedback**: Subtle vibration cues on recording start, stop, and completion.

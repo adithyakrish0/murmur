@@ -28,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class MurmurIME : InputMethodService() {
 
@@ -35,6 +36,8 @@ class MurmurIME : InputMethodService() {
     private lateinit var recorder: Recorder
     private lateinit var settings: Settings
     private val groqClient = GroqClient()
+
+    private var lastRecordedAudioFile: File? = null
 
     private val coroutineScope = CoroutineScope(Dispatchers.Main + Job())
     private var transcriptionJob: Job? = null
@@ -86,12 +89,18 @@ class MurmurIME : InputMethodService() {
     override fun onDestroy() {
         super.onDestroy()
         stopRecordingIfNeeded()
+        lastRecordedAudioFile?.delete()
+        lastRecordedAudioFile = null
         coroutineScope.coroutineContext[Job]?.cancel()
     }
 
     private fun setupListeners() {
         keyboardView.micButton.setOnClickListener {
             handleMicTap()
+        }
+
+        keyboardView.onRetryListener = {
+            retryLastRecording()
         }
 
         keyboardView.btnSettings.setOnClickListener {
@@ -152,20 +161,30 @@ class MurmurIME : InputMethodService() {
         }
 
         if (settings.apiKey.isBlank()) {
-            keyboardView.setState(MicState.ERROR, "No API key set. Tap to open settings.")
+            keyboardView.setState(MicState.ERROR, "No API key set. Tap settings gear.", canRetry = false)
             return
         }
 
         when (keyboardView.micButton.currentState) {
-            MicState.IDLE, MicState.ERROR, MicState.DONE -> startRecording()
+            MicState.IDLE, MicState.DONE -> startRecording()
+            MicState.ERROR -> {
+                // If in error, tapping the mic starts a fresh recording and discards previous failed audio
+                lastRecordedAudioFile?.delete()
+                lastRecordedAudioFile = null
+                startRecording()
+            }
             MicState.RECORDING -> stopRecordingAndTranscribe()
-            MicState.PROCESSING -> { /* ignore */ }
+            MicState.PROCESSING -> { /* ignore while transcribing */ }
         }
     }
 
     private fun startRecording() {
+        // Discard any previous audio file when starting fresh recording
+        lastRecordedAudioFile?.delete()
+        lastRecordedAudioFile = null
+
         if (!requestAudioFocus()) {
-            keyboardView.setState(MicState.ERROR, "Audio focus denied")
+            keyboardView.setState(MicState.ERROR, "Audio focus denied", canRetry = false)
             return
         }
 
@@ -183,7 +202,7 @@ class MurmurIME : InputMethodService() {
             handler.post(amplitudeRunnable)
         } else {
             abandonAudioFocus()
-            keyboardView.setState(MicState.ERROR, "Failed to start recording")
+            keyboardView.setState(MicState.ERROR, "Failed to start recording", canRetry = false)
         }
     }
 
@@ -208,9 +227,12 @@ class MurmurIME : InputMethodService() {
 
         val file = recorder.outputFile
         if (file == null || !file.exists()) {
-            keyboardView.setState(MicState.ERROR, "Recording failed")
+            keyboardView.setState(MicState.ERROR, "Recording failed", canRetry = false)
             return
         }
+
+        // Cache the file so it can be retried if network fails
+        lastRecordedAudioFile = file
 
         val apiKey = settings.apiKey
         val model = settings.selectedModel
@@ -221,22 +243,69 @@ class MurmurIME : InputMethodService() {
                     groqClient.transcribeAudio(apiKey, file, model)
                 }
                 if (isActive) {
-                    handleTranscriptionResult(result)
+                    handleTranscriptionResult(result, file)
                 }
-            } finally {
-                recorder.deleteRecording()
+            } catch (e: Exception) {
+                if (isActive) {
+                    handleTranscriptionResult(
+                        TranscriptionResult.Error(e.localizedMessage ?: "Transcription failed"),
+                        file
+                    )
+                }
             }
         }
     }
 
-    private fun handleTranscriptionResult(result: TranscriptionResult) {
+    private fun retryLastRecording() {
+        val file = lastRecordedAudioFile
+        if (file == null || !file.exists()) {
+            keyboardView.setState(MicState.ERROR, "No recording to retry", canRetry = false)
+            return
+        }
+
+        val apiKey = settings.apiKey
+        if (apiKey.isBlank()) {
+            keyboardView.setState(MicState.ERROR, "No API key set. Tap settings.", canRetry = false)
+            return
+        }
+
+        val model = settings.selectedModel
+        vibrate()
+        keyboardView.setState(MicState.PROCESSING)
+
+        transcriptionJob = coroutineScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    groqClient.transcribeAudio(apiKey, file, model)
+                }
+                if (isActive) {
+                    handleTranscriptionResult(result, file)
+                }
+            } catch (e: Exception) {
+                if (isActive) {
+                    handleTranscriptionResult(
+                        TranscriptionResult.Error(e.localizedMessage ?: "Retry failed"),
+                        file
+                    )
+                }
+            }
+        }
+    }
+
+    private fun handleTranscriptionResult(result: TranscriptionResult, file: File) {
         when (result) {
             is TranscriptionResult.Success -> {
                 val text = result.text.trim()
                 if (text.isEmpty()) {
-                    keyboardView.setState(MicState.ERROR, "Didn't catch anything")
+                    file.delete()
+                    lastRecordedAudioFile = null
+                    keyboardView.setState(MicState.ERROR, "Didn't catch anything", canRetry = false)
                     return
                 }
+
+                // Transcription succeeded: safely delete cached file
+                file.delete()
+                lastRecordedAudioFile = null
 
                 val ic = currentInputConnection
                 if (ic != null) {
@@ -259,11 +328,13 @@ class MurmurIME : InputMethodService() {
                         }
                     }, 1000)
                 } else {
-                    keyboardView.setState(MicState.ERROR, "No input field active")
+                    keyboardView.setState(MicState.ERROR, "No input field active", canRetry = false)
                 }
             }
             is TranscriptionResult.Error -> {
-                keyboardView.setState(MicState.ERROR, result.message)
+                // Keep file saved in lastRecordedAudioFile and enable retry!
+                lastRecordedAudioFile = file
+                keyboardView.setState(MicState.ERROR, result.message, canRetry = true)
             }
         }
     }

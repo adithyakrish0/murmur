@@ -22,10 +22,15 @@ class KeyboardView @JvmOverloads constructor(
     val timerText: TextView
     val btnSettings: ImageButton
 
+    val layoutRetry: LinearLayout
+    val btnRetry: TextView
+
     val btnGlobe: ImageButton
     val btnSpace: ImageButton
     val btnBackspace: ImageButton
     val btnEnter: ImageButton
+
+    var onRetryListener: (() -> Unit)? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private var recordingStartTime = 0L
@@ -38,10 +43,17 @@ class KeyboardView @JvmOverloads constructor(
         timerText = findViewById(R.id.timer_text)
         btnSettings = findViewById(R.id.btn_settings)
 
+        layoutRetry = findViewById(R.id.layout_retry)
+        btnRetry = findViewById(R.id.btn_retry)
+
         btnGlobe = findViewById(R.id.btn_globe)
         btnSpace = findViewById(R.id.btn_space)
         btnBackspace = findViewById(R.id.btn_backspace)
         btnEnter = findViewById(R.id.btn_enter)
+
+        btnRetry.setOnClickListener {
+            onRetryListener?.invoke()
+        }
 
         // Tint all icons with light color for dark background
         val iconTint = Color.parseColor("#E0E0E0")
@@ -64,35 +76,49 @@ class KeyboardView @JvmOverloads constructor(
         }
     }
 
-    fun setState(state: MicState, message: String? = null) {
+    fun setState(state: MicState, message: String? = null, canRetry: Boolean = false) {
         micButton.setState(state)
+        handler.removeCallbacksAndMessages(null)
 
         when (state) {
             MicState.IDLE -> {
                 hintText.text = message ?: "Tap to speak"
                 stopTimer()
+                layoutRetry.visibility = View.GONE
             }
             MicState.RECORDING -> {
                 hintText.text = message ?: "Listening… tap to stop"
                 startTimer()
+                layoutRetry.visibility = View.GONE
             }
             MicState.PROCESSING -> {
                 hintText.text = message ?: "Transcribing…"
                 stopTimer()
+                layoutRetry.visibility = View.GONE
             }
             MicState.DONE -> {
                 hintText.text = message ?: ""
                 stopTimer()
+                layoutRetry.visibility = View.GONE
             }
             MicState.ERROR -> {
                 hintText.text = message ?: "Error occurred"
                 stopTimer()
 
-                // Auto clear error
-                handler.removeCallbacksAndMessages(null)
-                handler.postDelayed({
-                    setState(MicState.IDLE)
-                }, 3000)
+                if (canRetry) {
+                    layoutRetry.visibility = View.VISIBLE
+                    // Keep retry option available longer so user has plenty of time
+                    handler.postDelayed({
+                        if (micButton.currentState == MicState.ERROR) {
+                            setState(MicState.IDLE)
+                        }
+                    }, 20000)
+                } else {
+                    layoutRetry.visibility = View.GONE
+                    handler.postDelayed({
+                        setState(MicState.IDLE)
+                    }, 3000)
+                }
             }
         }
     }
